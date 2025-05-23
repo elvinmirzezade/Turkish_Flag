@@ -1,57 +1,82 @@
 import cv2
 import numpy as np
+import RPi.GPIO as GPIO
+import time
 
-path = "D:\Turkey_Flag\turkey_flag.png"
+# Setup GPIO
+GPIO.setmode(GPIO.BCM)
 
+White_Led = 23
+Red_Led = 24
+Green_Led = 25  # New Green LED
 
+GPIO.setup(White_Led, GPIO.OUT)
+GPIO.setup(Red_Led, GPIO.OUT)
+GPIO.setup(Green_Led, GPIO.OUT)
 
-# Define lower and upper bounds for red in HSV
+# Turn on Green LED while the program runs
+GPIO.output(Green_Led, GPIO.HIGH)
+
+# HSV red color bounds
 lower_red1 = np.array([0, 150, 150])
 upper_red1 = np.array([10, 255, 255])
 lower_red2 = np.array([170, 150, 150])
 upper_red2 = np.array([180, 255, 255])
 
+# Open camera
 cap = cv2.VideoCapture(0)
 cap.set(cv2.CAP_PROP_FRAME_WIDTH, 320)
 cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 240)
 
+if not cap.isOpened():
+    print("Error: Camera Not Detected")
+    GPIO.output(Green_Led, GPIO.LOW)
+    exit()
 
+# Reference area to estimate similarity
+reference_area = 20000
 
-while True:
-    ret, frame = cap.read()
-    if not ret:
-        break
+try:
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            print("Failed to grab frame")
+            break
 
-    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+        mask1 = cv2.inRange(hsv, lower_red1, upper_red1)
+        mask2 = cv2.inRange(hsv, lower_red2, upper_red2)
+        mask = mask1 | mask2
 
-    mask1 = cv2.inRange(hsv, lower_red1, upper_red1)
-    mask2 = cv2.inRange(hsv, lower_red2, upper_red2)
-    mask = mask1 | mask2
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    flag_detected = False
+        flag_detected = False
+        similarity = 0
 
-    for cnt in contours:
-        area = cv2.contourArea(cnt)
-        if area > 20000:  # Smaller threshold for lower resolution
-            x, y, w, h = cv2.boundingRect(cnt)
-            roi = frame[y:y+h, x:x+w]
+        for cnt in contours:
+            area = cv2.contourArea(cnt)
+            if area > 8000:
+                flag_detected = True
+                similarity = min((area / reference_area) * 100, 100)
+                print(f"Flag Detected - Similarity: {similarity:.2f}%")
+                break
 
-            # Optional: Check for white crescent/star in ROI here
+        if flag_detected:
+            print("Flag Detected")
+            GPIO.output(White_Led, GPIO.LOW)
+            GPIO.output(Red_Led, GPIO.HIGH)
+            time.sleep(1)
+        else:
+            print("Not detected")
+            GPIO.output(Red_Led, GPIO.LOW)
+            time.sleep(1)
+            GPIO.output(White_Led, GPIO.HIGH)
 
-            cv2.rectangle(frame, (x, y), (x+w, y+h), (0, 255, 0), 2)
-            flag_detected = True
+        time.sleep(0.5)
 
-    if flag_detected:
-        cv2.putText(frame, "Turkish Flag Detected!", (10, 30),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-    else:
-        cv2.putText(frame, "Flag Not Detected", (10, 30),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+except KeyboardInterrupt:
+    print("System Stopped")
 
-    cv2.imshow('Flag Detection', frame)
-    if cv2.waitKey(1) & 0xFF == ord('q'):
-        break
-
-cap.release()
-cv2.destroyAllWindows()
+finally:
+    cap.release()
+    GPIO.cleanup()  # This turns off all LEDs including Green
